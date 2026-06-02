@@ -1,4 +1,4 @@
-export REDIS_HOST=
-export REDIS_PORT=
-export REDIS_SLOW_HOST=
-export REDIS_SLOW_PORT=
+export REDIS_HOST=localhost
+export REDIS_PORT=6379
+export REDIS_SLOW_HOST=localhost
+export REDIS_SLOW_PORT=6380

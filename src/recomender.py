@@ -1,12 +1,16 @@
 import asyncio
 import pickle
+import random
 
 import numpy as np
-from curl_cffi.requests import AsyncSession
-from scipy.sparse import coo_matrix, csr_matrix
+from scipy.sparse import csr_matrix
 
 from src.users import get_user_diary_page
 from src.cache import cache
+
+BATCH = 3
+INTER_BATCH_SLEEP_MIN = 0.5
+INTER_BATCH_SLEEP_MAX = 1.5
 
 
 with open("model/model.pkl", "rb") as f:
@@ -19,8 +23,8 @@ id_to_film = {idx: film_id for film_id, idx in item_map.items()}
 
 
 def process_film_id(film_id):
-    film_id = film_id.split("/")
-    film_id = "/".join(film_id[1:3])
+    parts = film_id.split("/")
+    film_id = "/".join(parts[1:3])
     return f"/{film_id}/"
 
 
@@ -68,11 +72,7 @@ def get_live_recommendations(film_ids_raw, ratings, likes, is_seed, N=10):
         filter_already_liked_items=True,
     )
 
-    recommended_films = [id_to_film[i] for i in ids]
-    return recommended_films
-
-
-BATCH = 10
+    return [id_to_film[i] for i in ids]
 
 
 async def compute_ranked_by_user_id(user_id: str, k: int = 1000) -> list[str]:
@@ -82,44 +82,46 @@ async def compute_ranked_by_user_id(user_id: str, k: int = 1000) -> list[str]:
     raw_likes = []
 
     page = 1
-    async with AsyncSession(impersonate="chrome") as session:
-        while True:
-            tasks = [
-                get_user_diary_page(session, user_id, page + i) for i in range(BATCH)
-            ]
-            pages = await asyncio.gather(*tasks)
+    while True:
+        tasks = [
+            get_user_diary_page(user_id, page + i) for i in range(BATCH)
+        ]
+        results = await asyncio.gather(*tasks)
 
-            if all(not p for p in pages):
-                break
+        any_data = False
+        for status, data in results:
+            if status != "ok" or not data:
+                continue
+            any_data = True
 
-            for data in pages:
-                if not data:
+            for r in data:
+                fid = r.get("film_id")
+                if not fid:
+                    continue
+                fid = process_film_id(fid)
+
+                if fid in seen:
                     continue
 
-                for r in data:
-                    fid = r.get("film_id")
-                    if not fid:
-                        continue
-                    fid = process_film_id(fid)
+                seen.add(fid)
 
-                    if fid in seen:
-                        continue
+                rating = r.get("rating")
+                liked = r.get("liked", False)
 
-                    seen.add(fid)
+                r_val = (
+                    float(rating) if (rating is not None and rating > 0) else 0.0
+                )
+                l_val = 1.0 if liked else 0.0
 
-                    rating = r.get("rating")
-                    liked = r.get("liked", False)
+                raw_film_ids.append(fid)
+                raw_ratings.append(r_val)
+                raw_likes.append(l_val)
 
-                    r_val = (
-                        float(rating) if (rating is not None and rating > 0) else 0.0
-                    )
-                    l_val = 1.0 if liked else 0.0
+        if not any_data:
+            break
 
-                    raw_film_ids.append(fid)
-                    raw_ratings.append(r_val)
-                    raw_likes.append(l_val)
-
-            page += BATCH
+        page += BATCH
+        await asyncio.sleep(random.uniform(INTER_BATCH_SLEEP_MIN, INTER_BATCH_SLEEP_MAX))
 
     if len(raw_film_ids) < 2:
         return []
@@ -153,11 +155,14 @@ async def get_ranked_cached(user_id: str, page: int):
 
     ranked = cache.get(key)
     if ranked is not None:
-        return paginate_ranked(ranked, page)
+        return ("ok", paginate_ranked(ranked, page))
 
     ranked = await compute_ranked_by_user_id(user_id, 1000)
+    if not ranked:
+        return ("ok", [])
+
     cache.set(key, ranked)
-    return paginate_ranked(ranked, page)
+    return ("ok", paginate_ranked(ranked, page))
 
 
 async def get_ranked_by_seeds_cached(seed_film_ids: list[str], page: int):
@@ -165,8 +170,11 @@ async def get_ranked_by_seeds_cached(seed_film_ids: list[str], page: int):
 
     ranked = cache.get(key)
     if ranked is not None:
-        return paginate_ranked(ranked, page)
+        return ("ok", paginate_ranked(ranked, page))
 
     ranked = await compute_ranked_by_seeds(seed_film_ids, 1000)
+    if not ranked:
+        return ("ok", [])
+
     cache.set(key, ranked)
-    return paginate_ranked(ranked, page)
+    return ("ok", paginate_ranked(ranked, page))

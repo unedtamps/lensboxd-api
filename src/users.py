@@ -5,10 +5,10 @@ from bs4 import BeautifulSoup
 
 from src.film import get_film_by_id
 from src.utils import fetch_html
+from src.cache import cache, cache_slow
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-}
+FAVORITES_FANOUT = 3
+DIARY_CACHE_PREFIX = "diary"
 
 
 def convert_stars_to_number(star_str: Optional[str]) -> Optional[float]:
@@ -44,13 +44,18 @@ def parse_diary(html: str):
         }
 
 
-async def scrape_user(session, user_id: str, page: int):
+async def scrape_user(user_id: str, page: int):
+    cache_key = f"{DIARY_CACHE_PREFIX}:{user_id}:{page}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return ("ok", cached)
+
     datas = []
     diary_url = f"https://letterboxd.com{user_id}films/page/{page}/"
 
-    html = await fetch_html(session, diary_url)
-    if not html:
-        return []
+    status, html = await fetch_html(diary_url)
+    if status != "ok" or not html:
+        return (status, [])
 
     for entry in parse_diary(html):
         film_id = clean_film_url(entry["film_href"])
@@ -65,12 +70,13 @@ async def scrape_user(session, user_id: str, page: int):
         }
         datas.append(data)
 
-    return datas
+    cache.set(cache_key, datas)
+    return ("ok", datas)
 
 
-async def get_user_diary_page(session, user_id: str, page: int):
+async def get_user_diary_page(user_id: str, page: int):
     formatted_uid = f"/{user_id}/"
-    return await scrape_user(session, formatted_uid, page)
+    return await scrape_user(formatted_uid, page)
 
 
 def parse_favorites(html: str):
@@ -83,22 +89,33 @@ def parse_favorites(html: str):
             yield film_id
 
 
-async def get_user_favorites_handler(session, user_id: str):
+async def get_user_favorites_handler(user_id: str):
     formatted_uid = f"/{user_id}/"
-    html = await fetch_html(session, f"https://letterboxd.com{formatted_uid}")
-    if not html:
-        return []
+    cache_key = f"favorites:{formatted_uid}"
+
+    cached = cache_slow.get(cache_key)
+    if cached is not None:
+        return ("ok", cached)
+
+    status, html = await fetch_html(f"https://letterboxd.com{formatted_uid}")
+    if status != "ok" or not html:
+        return (status, [])
 
     film_ids = list(parse_favorites(html))
-    
-    # Fetch all film details concurrently
-    tasks = [get_film_by_id(film_id) for film_id in film_ids]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Filter out exceptions and None results
+
+    semaphore = asyncio.Semaphore(FAVORITES_FANOUT)
+
+    async def fetch_with_cap(film_id):
+        async with semaphore:
+            return await get_film_by_id(film_id)
+
+    tasks = [fetch_with_cap(film_id) for film_id in film_ids]
+    results = await asyncio.gather(*tasks)
+
     datas = [
-        result for result in results 
-        if not isinstance(result, Exception) and result is not None
+        data for s, data in results
+        if s == "ok" and data is not None
     ]
-    
-    return datas
+
+    cache_slow.set(cache_key, datas)
+    return ("ok", datas)

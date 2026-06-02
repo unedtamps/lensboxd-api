@@ -1,21 +1,14 @@
-import asyncio
-from logging import debug
-
-from curl_cffi.requests import AsyncSession
 from flasgger import Swagger
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+from src.cache import cache, cache_slow
 from src.film import get_film_by_id
 from src.get_list import get_list as fetch_list
-from src.recomender import (
-    get_ranked_by_seeds_cached,
-    get_ranked_cached,
-)
-from src.cache import cache, cache_slow
-
+from src.recomender import get_ranked_by_seeds_cached, get_ranked_cached
 from src.search import get_film_by_name
 from src.users import get_user_diary_page, get_user_favorites_handler
+from src.utils import RETRY_AFTER_SECONDS
 
 app = Flask(__name__)
 swagger = Swagger(app)
@@ -25,9 +18,18 @@ cors = CORS(app)
 cache.init_app(app)
 cache_slow.init_app(app)
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-}
+
+RETRY_AFTER_HEADER = {"Retry-After": str(RETRY_AFTER_SECONDS)}
+
+
+def _status_to_response(status, data):
+    if status == "ok":
+        return jsonify(data), 200
+    if status == "not_found":
+        return jsonify({"error": "not found"}), 404
+    if status == "blocked":
+        return jsonify({"error": "upstream rate-limited"}), 503, RETRY_AFTER_HEADER
+    return jsonify({"error": "upstream error"}), 502
 
 
 @app.route("/film/<string:id>", methods=["GET"])
@@ -46,14 +48,19 @@ async def get_film(id):
     responses:
       200:
         description: Film data retrieved successfully
+      404:
+        description: Film not found
+      503:
+        description: Upstream rate-limited
     """
     key = f"film:{id}"
     if cache_slow.get(key):
         data = cache_slow.get(key)
         return jsonify(data)
-    data = await get_film_by_id(f"/film/{id}")
-    cache_slow.set(key, data)
-    return jsonify(data)
+    status, data = await get_film_by_id(f"/film/{id}")
+    if status == "ok" and data:
+        cache_slow.set(key, data)
+    return _status_to_response(status, data)
 
 
 @app.route("/diary/<string:user_id>", methods=["GET"])
@@ -76,17 +83,18 @@ async def get_dialy_user(user_id):
     responses:
       200:
         description: User diary data
+      503:
+        description: Upstream rate-limited
     """
     page = request.args.get("page", default=1, type=int)
+    status, data = await get_user_diary_page(user_id, page)
+    return _status_to_response(status, data)
 
-    async with AsyncSession(impersonate="chrome") as session:
-        data = await get_user_diary_page(session, user_id, page)
-    return jsonify(data)
 
 @app.route("/favorites/<string:user_id>", methods=["GET"])
 async def get_favorite_user(user_id):
     """
-    Get user favorites 
+    Get user favorites
     ---
     tags:
       - Users
@@ -103,12 +111,11 @@ async def get_favorite_user(user_id):
     responses:
       200:
         description: User diary data
+      503:
+        description: Upstream rate-limited
     """
-    page = request.args.get("page", default=1, type=int)
-
-    async with AsyncSession(impersonate="chrome") as session:
-        data = await get_user_favorites_handler(session, user_id)
-    return jsonify(data)
+    status, data = await get_user_favorites_handler(user_id)
+    return _status_to_response(status, data)
 
 
 @app.route("/recommend/personalize/<string:user_id>", methods=["GET"])
@@ -133,9 +140,8 @@ async def get_recommend_user(user_id):
         description: List of recommended films
     """
     k = request.args.get("k", default=1, type=int)
-
-    data = await get_ranked_cached(user_id, k)
-    return jsonify(data)
+    status, data = await get_ranked_cached(user_id, k)
+    return _status_to_response(status, data)
 
 
 @app.route("/recommend/seed", methods=["POST"])
@@ -168,8 +174,8 @@ async def get_recommend_seed():
     seed_film_ids = body.get("seed_film_ids", [])
     k = body.get("k", 1)
 
-    data = await get_ranked_by_seeds_cached(seed_film_ids, k)
-    return jsonify(data)
+    status, data = await get_ranked_by_seeds_cached(seed_film_ids, k)
+    return _status_to_response(status, data)
 
 
 @app.route("/get_list", methods=["GET"])
@@ -196,15 +202,19 @@ async def get_list():
     responses:
       200:
         description: The fetched list data
+      503:
+        description: Upstream rate-limited
     """
     list_url = request.args.get(
-        "list_url", default="https://letterboxd.com/official/list/top-250-films-with-the-most-fans", type=str
+        "list_url",
+        default="https://letterboxd.com/official/list/top-250-films-with-the-most-fans",
+        type=str,
     )
     page = request.args.get("page", default=None, type=int)
     limit = request.args.get("limit", default=None, type=int)
 
-    data = await fetch_list(list_url, page=page, limit=limit)
-    return jsonify(data)
+    status, data = await fetch_list(list_url, page=page, limit=limit)
+    return _status_to_response(status, data)
 
 
 @app.route("/search", methods=["GET"])
@@ -223,6 +233,8 @@ async def search_films():
     responses:
       200:
         description: List of films matching the search query
+      503:
+        description: Upstream rate-limited
     """
     query = request.args.get("query", default="", type=str)
     if not query:
@@ -234,9 +246,10 @@ async def search_films():
         data = cache_slow.get(key)
         return jsonify(data)
 
-    data = await get_film_by_name(query)
-    cache_slow.set(key, data)
-    return jsonify(data)
+    status, data = await get_film_by_name(query)
+    if status == "ok" and data:
+        cache_slow.set(key, data)
+    return _status_to_response(status, data)
 
 
 if __name__ == "__main__":

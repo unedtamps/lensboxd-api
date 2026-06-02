@@ -1,10 +1,7 @@
-import asyncio
 import json
 import re
-import time
 
 from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
 
 from src.utils import fetch_html
 
@@ -92,16 +89,7 @@ def parse_film_data(html, film_id):
 
 async def get_film_by_id(film_id):
     url = f"https://letterboxd.com{film_id}"
-    start_time = time.time()
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-
-    async with AsyncSession(impersonate="chrome") as session:
-        html = await fetch_html(session, url)
-        if not html:
-            return None
-
-        data = parse_film_data(html, film_id)
-        return data
+    status, html = await fetch_html(url)
+    if status != "ok" or not html:
+        return (status, None)
+    return ("ok", parse_film_data(html, film_id))
