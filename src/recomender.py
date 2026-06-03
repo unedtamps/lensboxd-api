@@ -75,6 +75,7 @@ async def compute_ranked_by_user_id(user_id: str, k: int = 1000) -> list[str]:
 
     entries = await get_user_diary_all(user_id)
     if not entries:
+        print(f"[POSTGRES MISS] No diary entries found for user {user_id} in database", flush=True)
         return []
 
     raw_film_ids = []
@@ -131,6 +132,7 @@ async def get_ranked_cached(user_id: str, page: int):
     if ranked is not None:
         return ("ok", paginate_ranked(ranked, page))
 
+    print(f"[CACHE MISS] Recommendations list for user {user_id}", flush=True)
     ranked = await compute_ranked_by_user_id(user_id, 1000)
     if not ranked:
         return ("ok", [])
@@ -146,6 +148,7 @@ async def get_ranked_by_seeds_cached(seed_film_ids: list[str], page: int):
     if ranked is not None:
         return ("ok", paginate_ranked(ranked, page))
 
+    print(f"[CACHE MISS] Seed-based recommendations for seeds: {seed_film_ids}", flush=True)
     ranked = await compute_ranked_by_seeds(seed_film_ids, 1000)
     if not ranked:
         return ("ok", [])

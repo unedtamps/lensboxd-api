@@ -51,6 +51,7 @@ async def scrape_user(user_id: str, page: int):
     if cached is not None:
         return ("ok", cached)
 
+    print(f"[CACHE MISS] Diary page {page} for user {user_id}", flush=True)
     datas = []
     diary_url = f"https://letterboxd.com/{user_id}/films/page/{page}/"
 
@@ -85,7 +86,7 @@ async def scrape_user(user_id: str, page: int):
         try:
             await upsert_diary_entries(db_entries)
         except Exception as e:
-            print(f"[DB] Failed to upsert diary entries for {user_id}: {e}")
+            print(f"[DB] Failed to upsert diary entries for {user_id}: {e}", flush=True)
 
     cache.set(cache_key, datas)
     return ("ok", datas)
@@ -96,6 +97,7 @@ async def sync_diary(user_id: str) -> None:
     has_entries = await user_has_diary(user_id)
 
     if not has_entries:
+        print(f"[POSTGRES MISS] User {user_id} has no diary entries. Running full sync.", flush=True)
         page = 1
         while True:
             status, entries = await scrape_user(user_id, page)
@@ -122,6 +124,7 @@ async def sync_diary(user_id: str) -> None:
             if await diary_entry_exists(user_id, film_id):
                 continue
 
+            print(f"[POSTGRES MISS] Diary entry for user {user_id} and film {film_id} does not exist. Adding to scrape queue.", flush=True)
             all_existing = False
             rating = convert_stars_to_number(entry["rating"])
             liked = entry["liked"]
@@ -136,7 +139,7 @@ async def sync_diary(user_id: str) -> None:
             try:
                 await upsert_diary_entries(page_entries)
             except Exception as e:
-                print(f"[DB] Failed to upsert diary entries for {user_id}: {e}")
+                print(f"[DB] Failed to upsert diary entries for {user_id}: {e}", flush=True)
 
         if all_existing:
             break

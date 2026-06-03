@@ -58,6 +58,7 @@ async def get_film(id):
     cached = cache.get(key)
     if cached:
         return jsonify(cached)
+    print(f"[CACHE MISS] Film details for ID: {id}", flush=True)
     status, data = await get_film_by_id(f"/film/{id}")
     if status == "ok" and data:
         cache.set(key, data)
@@ -247,6 +248,7 @@ async def search_films():
     if cached:
         return jsonify(cached)
 
+    print(f"[CACHE MISS] Search query: {query}", flush=True)
     status, data = await get_film_by_name(query)
     if status == "ok" and data:
         cache.set(key, data)

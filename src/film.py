@@ -88,13 +88,22 @@ def parse_film_data(html, film_id):
     return data
 
 
+def normalize_film_id(film_id: str) -> str:
+    slug = film_id.strip().strip("/")
+    if slug.startswith("film/"):
+        slug = slug[len("film/"):]
+    return f"/film/{slug}/"
+
+
 async def get_film_by_id(film_id):
+    film_id = normalize_film_id(film_id)
     try:
         db_film = await get_film(film_id)
         if db_film:
             return ("ok", db_film)
+        print(f"[POSTGRES MISS] Film {film_id} not found in database", flush=True)
     except Exception as e:
-        print(f"[DB] Failed to read film {film_id}: {e}")
+        print(f"[DB] Failed to read film {film_id}: {e}", flush=True)
 
     url = f"https://letterboxd.com{film_id}"
     status, html = await fetch_html(url)
@@ -104,5 +113,5 @@ async def get_film_by_id(film_id):
     try:
         await upsert_film(data)
     except Exception as e:
-        print(f"[DB] Failed to upsert film {film_id}: {e}")
+        print(f"[DB] Failed to upsert film {film_id}: {e}", flush=True)
     return ("ok", data)

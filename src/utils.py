@@ -1,8 +1,9 @@
 import asyncio
 import random
+import time
 from typing import Literal
 
-from curl_cffi.requests import AsyncSession
+from curl_cffi.requests import Session
 
 IMPERSONATE = "chrome136"
 MAX_RETRIES = 3
@@ -44,8 +45,8 @@ def _backoff(attempt: int) -> float:
     return max(0.5, base + jitter)
 
 
-def _create_session() -> AsyncSession:
-    return AsyncSession(impersonate=IMPERSONATE, headers=CHROME_HEADERS)
+def _create_session() -> Session:
+    return Session(impersonate=IMPERSONATE, headers=CHROME_HEADERS)
 
 
 def _log_block(url: str, status_code: int, body_snippet: str) -> None:
@@ -62,56 +63,59 @@ async def fetch_html(url: str) -> FetchResult:
     if not host:
         return ("error", None)
 
-    last_status: int | None = None
+    def _sync_fetch() -> FetchResult:
+        last_status: int | None = None
 
-    for attempt in range(MAX_RETRIES + 1):
-        session = _create_session()
-        try:
-            await asyncio.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))
+        for attempt in range(MAX_RETRIES + 1):
+            session = _create_session()
+            try:
+                time.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))
 
-            response = await session.get(url, timeout=DEFAULT_TIMEOUT)
-            last_status = response.status_code
+                response = session.get(url, timeout=DEFAULT_TIMEOUT)
+                last_status = response.status_code
 
-            if response.status_code == 200:
-                return ("ok", response.text)
+                if response.status_code == 200:
+                    return ("ok", response.text)
 
-            if response.status_code == 404:
-                return ("not_found", None)
+                if response.status_code == 404:
+                    return ("not_found", None)
 
-            if response.status_code == 403:
-                _log_block(url, 403, response.text[:500] if response.text else "")
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(_backoff(attempt))
-                    continue
-                return ("blocked", None)
-
-            if response.status_code in (408, 429, 500, 502, 503, 504):
-                _log_block(url, response.status_code, response.text[:500] if response.text else "")
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(_backoff(attempt))
-                    continue
-                if response.status_code in (429, 503):
+                if response.status_code == 403:
+                    _log_block(url, 403, response.text[:500] if response.text else "")
+                    if attempt < MAX_RETRIES:
+                        time.sleep(_backoff(attempt))
+                        continue
                     return ("blocked", None)
+
+                if response.status_code in (408, 429, 500, 502, 503, 504):
+                    _log_block(url, response.status_code, response.text[:500] if response.text else "")
+                    if attempt < MAX_RETRIES:
+                        time.sleep(_backoff(attempt))
+                        continue
+                    if response.status_code in (429, 503):
+                        return ("blocked", None)
+                    return ("error", None)
+
+                print(f"[UNEXPECTED] {url} | status={response.status_code}")
                 return ("error", None)
 
-            print(f"[UNEXPECTED] {url} | status={response.status_code}")
-            return ("error", None)
+            except Exception as e:
+                print(f"[ERROR] fetching {url}: {e}")
+                if attempt < MAX_RETRIES:
+                    time.sleep(_backoff(attempt))
+                    continue
+                return ("error", None)
+            finally:
+                try:
+                    session.close()
+                except Exception:
+                    pass
 
-        except Exception as e:
-            print(f"[ERROR] fetching {url}: {e}")
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(_backoff(attempt))
-                continue
-            return ("error", None)
-        finally:
-            try:
-                await session.close()
-            except Exception:
-                pass
+        if last_status == 403:
+            return ("blocked", None)
+        return ("error", None)
 
-    if last_status == 403:
-        return ("blocked", None)
-    return ("error", None)
+    return await asyncio.to_thread(_sync_fetch)
 
 
 async def shutdown() -> None:
