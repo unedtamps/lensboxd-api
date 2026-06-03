@@ -3,7 +3,7 @@ import re
 
 from bs4 import BeautifulSoup
 
-from src.db import upsert_film
+from src.db import upsert_film, get_film
 from src.utils import fetch_html
 
 
@@ -89,6 +89,13 @@ def parse_film_data(html, film_id):
 
 
 async def get_film_by_id(film_id):
+    try:
+        db_film = await get_film(film_id)
+        if db_film:
+            return ("ok", db_film)
+    except Exception as e:
+        print(f"[DB] Failed to read film {film_id}: {e}")
+
     url = f"https://letterboxd.com{film_id}"
     status, html = await fetch_html(url)
     if status != "ok" or not html:
