@@ -1,8 +1,11 @@
+import asyncio
+
 from flasgger import Swagger
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from src.cache import cache, cache_slow
+from src.cache import cache
+from src.db import init_db, close_db
 from src.film import get_film_by_id
 from src.get_list import get_list as fetch_list
 from src.recomender import get_ranked_by_seeds_cached, get_ranked_cached
@@ -14,9 +17,7 @@ app = Flask(__name__)
 swagger = Swagger(app)
 cors = CORS(app)
 
-
 cache.init_app(app)
-cache_slow.init_app(app)
 
 
 RETRY_AFTER_HEADER = {"Retry-After": str(RETRY_AFTER_SECONDS)}
@@ -54,12 +55,12 @@ async def get_film(id):
         description: Upstream rate-limited
     """
     key = f"film:{id}"
-    if cache_slow.get(key):
-        data = cache_slow.get(key)
-        return jsonify(data)
+    cached = cache.get(key)
+    if cached:
+        return jsonify(cached)
     status, data = await get_film_by_id(f"/film/{id}")
     if status == "ok" and data:
-        cache_slow.set(key, data)
+        cache.set(key, data)
     return _status_to_response(status, data)
 
 
@@ -110,7 +111,7 @@ async def get_favorite_user(user_id):
         description: Page number for pagination
     responses:
       200:
-        description: User diary data
+        description: User favorites data
       503:
         description: Upstream rate-limited
     """
@@ -242,15 +243,16 @@ async def search_films():
 
     key = f"search:{query}"
 
-    if cache_slow.get(key):
-        data = cache_slow.get(key)
-        return jsonify(data)
+    cached = cache.get(key)
+    if cached:
+        return jsonify(cached)
 
     status, data = await get_film_by_name(query)
     if status == "ok" and data:
-        cache_slow.set(key, data)
+        cache.set(key, data)
     return _status_to_response(status, data)
 
 
 if __name__ == "__main__":
+    asyncio.run(init_db())
     app.run(debug=False, host="0.0.0.0", port=5000)

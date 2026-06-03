@@ -1,16 +1,11 @@
-import asyncio
 import pickle
-import random
 
 import numpy as np
 from scipy.sparse import csr_matrix
 
-from src.users import get_user_diary_page
+from src.users import sync_diary
+from src.db import get_user_diary_all
 from src.cache import cache
-
-BATCH = 3
-INTER_BATCH_SLEEP_MIN = 0.5
-INTER_BATCH_SLEEP_MAX = 1.5
 
 
 with open("model/model.pkl", "rb") as f:
@@ -76,52 +71,31 @@ def get_live_recommendations(film_ids_raw, ratings, likes, is_seed, N=10):
 
 
 async def compute_ranked_by_user_id(user_id: str, k: int = 1000) -> list[str]:
-    seen = set()
+    await sync_diary(user_id)
+
+    entries = await get_user_diary_all(user_id)
+    if not entries:
+        return []
+
     raw_film_ids = []
     raw_ratings = []
     raw_likes = []
 
-    page = 1
-    while True:
-        tasks = [
-            get_user_diary_page(user_id, page + i) for i in range(BATCH)
-        ]
-        results = await asyncio.gather(*tasks)
+    for entry in entries:
+        fid = entry.get("film_id")
+        if not fid:
+            continue
+        fid = process_film_id(fid)
 
-        any_data = False
-        for status, data in results:
-            if status != "ok" or not data:
-                continue
-            any_data = True
+        rating = entry.get("rating")
+        liked = entry.get("liked", False)
 
-            for r in data:
-                fid = r.get("film_id")
-                if not fid:
-                    continue
-                fid = process_film_id(fid)
+        r_val = float(rating) if (rating is not None and rating > 0) else 0.0
+        l_val = 1.0 if liked else 0.0
 
-                if fid in seen:
-                    continue
-
-                seen.add(fid)
-
-                rating = r.get("rating")
-                liked = r.get("liked", False)
-
-                r_val = (
-                    float(rating) if (rating is not None and rating > 0) else 0.0
-                )
-                l_val = 1.0 if liked else 0.0
-
-                raw_film_ids.append(fid)
-                raw_ratings.append(r_val)
-                raw_likes.append(l_val)
-
-        if not any_data:
-            break
-
-        page += BATCH
-        await asyncio.sleep(random.uniform(INTER_BATCH_SLEEP_MIN, INTER_BATCH_SLEEP_MAX))
+        raw_film_ids.append(fid)
+        raw_ratings.append(r_val)
+        raw_likes.append(l_val)
 
     if len(raw_film_ids) < 2:
         return []

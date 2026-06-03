@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   gcc \
   g++ \
   libffi-dev \
+  libpq-dev \
   && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv /opt/venv
@@ -18,6 +19,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 FROM python:3.13-slim
 
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  libpq5 \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"

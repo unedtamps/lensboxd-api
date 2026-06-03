@@ -6,12 +6,13 @@ from flask import Flask
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.cache import cache_slow
+from src.cache import cache
+from src.db import init_db
 from src.film import get_film_by_id
 from src.search import get_film_by_name
 
 app = Flask(__name__)
-cache_slow.init_app(app)
+cache.init_app(app)
 
 FILM_IDS = [
     "/film/the-matrix/",
@@ -43,12 +44,12 @@ SEARCH_QUERIES = [
 async def warm_film(film_id):
     key = f"film:{film_id}"
     with app.app_context():
-        if cache_slow.get(key):
+        if cache.get(key):
             print(f"skip {key}")
             return
         status, data = await get_film_by_id(film_id)
         if status == "ok" and data:
-            cache_slow.set(key, data)
+            cache.set(key, data)
             print(f"ok   {key}")
         else:
             print(f"miss {key} status={status}")
@@ -57,18 +58,19 @@ async def warm_film(film_id):
 async def warm_search(query):
     key = f"search:{query}"
     with app.app_context():
-        if cache_slow.get(key):
+        if cache.get(key):
             print(f"skip {key}")
             return
         status, data = await get_film_by_name(query)
         if status == "ok" and data:
-            cache_slow.set(key, data)
+            cache.set(key, data)
             print(f"ok   {key}")
         else:
             print(f"miss {key} status={status}")
 
 
 async def main():
+    await init_db()
     for film_id in FILM_IDS:
         await warm_film(film_id)
     for query in SEARCH_QUERIES:

@@ -5,10 +5,10 @@ from bs4 import BeautifulSoup
 
 from src.film import get_film_by_id
 from src.utils import fetch_html
-from src.cache import cache, cache_slow
+from src.cache import cache
+from src.db import upsert_diary_entries, user_has_diary, diary_entry_exists, get_user_diary_all
 
 FAVORITES_FANOUT = 3
-DIARY_CACHE_PREFIX = "diary"
 
 
 def convert_stars_to_number(star_str: Optional[str]) -> Optional[float]:
@@ -45,38 +45,107 @@ def parse_diary(html: str):
 
 
 async def scrape_user(user_id: str, page: int):
-    cache_key = f"{DIARY_CACHE_PREFIX}:{user_id}:{page}"
+    """Scrape diary page for user. user_id is raw (e.g. 'megbitchell')."""
+    cache_key = f"diary:{user_id}:{page}"
     cached = cache.get(cache_key)
     if cached is not None:
         return ("ok", cached)
 
     datas = []
-    diary_url = f"https://letterboxd.com{user_id}films/page/{page}/"
+    diary_url = f"https://letterboxd.com/{user_id}/films/page/{page}/"
 
     status, html = await fetch_html(diary_url)
     if status != "ok" or not html:
         return (status, [])
 
+    db_entries = []
     for entry in parse_diary(html):
         film_id = clean_film_url(entry["film_href"])
         if not film_id:
             continue
 
+        rating = convert_stars_to_number(entry["rating"])
+        liked = entry["liked"]
+
         data = {
             "user_id": user_id,
             "film_id": film_id,
-            "rating": convert_stars_to_number(entry["rating"]),
-            "liked": entry["liked"],
+            "rating": rating,
+            "liked": liked,
         }
         datas.append(data)
+        db_entries.append({
+            "user_id": user_id,
+            "film_id": film_id,
+            "rating": rating,
+            "liked": liked,
+        })
+
+    if db_entries:
+        try:
+            await upsert_diary_entries(db_entries)
+        except Exception as e:
+            print(f"[DB] Failed to upsert diary entries for {user_id}: {e}")
 
     cache.set(cache_key, datas)
     return ("ok", datas)
 
 
+async def sync_diary(user_id: str) -> None:
+    """Incremental scrape: stop when hitting an entry that already exists in DB."""
+    has_entries = await user_has_diary(user_id)
+
+    if not has_entries:
+        page = 1
+        while True:
+            status, entries = await scrape_user(user_id, page)
+            if status != "ok" or not entries:
+                break
+            page += 1
+        return
+
+    page = 1
+    MAX_SYNC_PAGES = 5
+    while page <= MAX_SYNC_PAGES:
+        diary_url = f"https://letterboxd.com/{user_id}/films/page/{page}/"
+        status, html = await fetch_html(diary_url)
+        if status != "ok" or not html:
+            break
+
+        page_entries = []
+        all_existing = True
+        for entry in parse_diary(html):
+            film_id = clean_film_url(entry["film_href"])
+            if not film_id:
+                continue
+
+            if await diary_entry_exists(user_id, film_id):
+                continue
+
+            all_existing = False
+            rating = convert_stars_to_number(entry["rating"])
+            liked = entry["liked"]
+            page_entries.append({
+                "user_id": user_id,
+                "film_id": film_id,
+                "rating": rating,
+                "liked": liked,
+            })
+
+        if page_entries:
+            try:
+                await upsert_diary_entries(page_entries)
+            except Exception as e:
+                print(f"[DB] Failed to upsert diary entries for {user_id}: {e}")
+
+        if all_existing:
+            break
+
+        page += 1
+
+
 async def get_user_diary_page(user_id: str, page: int):
-    formatted_uid = f"/{user_id}/"
-    return await scrape_user(formatted_uid, page)
+    return await scrape_user(user_id, page)
 
 
 def parse_favorites(html: str):
@@ -93,7 +162,7 @@ async def get_user_favorites_handler(user_id: str):
     formatted_uid = f"/{user_id}/"
     cache_key = f"favorites:{formatted_uid}"
 
-    cached = cache_slow.get(cache_key)
+    cached = cache.get(cache_key)
     if cached is not None:
         return ("ok", cached)
 
@@ -117,5 +186,5 @@ async def get_user_favorites_handler(user_id: str):
         if s == "ok" and data is not None
     ]
 
-    cache_slow.set(cache_key, datas)
+    cache.set(cache_key, datas)
     return ("ok", datas)

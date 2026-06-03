@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 
 from src.film import get_film_by_id
 from src.utils import fetch_html
-from src.cache import cache_slow
+from src.cache import cache
 
 
 def extract_text(element):
@@ -21,13 +21,13 @@ def upscale_poster(url):
 
 async def fetch_film_details(film_id):
     key = f"film:{film_id}"
-    cached = cache_slow.get(key)
+    cached = cache.get(key)
     if cached:
         return (film_id, "ok", cached)
 
     film_status, film_details = await get_film_by_id(film_id)
     if film_status == "ok" and film_details:
-        cache_slow.set(key, film_details)
+        cache.set(key, film_details)
     return (film_id, film_status, film_details)
 
 

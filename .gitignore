@@ -5,3 +5,4 @@ archive
 model/model.pkl
 src/__pycache__
 .envrc
+data/

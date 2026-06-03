@@ -1,18 +1,29 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: boxd-postgres
+    env_file:
+      - .envrc
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - 5440:5432
+    networks:
+      - boxd-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lensboxd -d lensboxd"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   redis:
-    image: redis:7
+    image: redis:8.6-alpine
     container_name: boxd-redis
     ports:
       - 6388:6379
     networks:
       - boxd-net
-  redis-slow:
-    image: redis:7
-    container_name: boxd-redis-slow
-    ports:
-      - 6389:6379
-    networks:
-      - boxd-net
+
   api-boxd:
     container_name: boxd-api
     image: unedotamps/letterboxd-api
@@ -21,6 +32,11 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .envrc
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - ./model/model.pkl:/app/model/model.pkl
     ports:

@@ -25,6 +25,8 @@ MarkupSafe==3.0.3
 mistune==3.2.0
 multidict==6.7.0
 numpy==2.4.0
+psycopg[binary]==3.3.4
+psycopg_pool==3.3.1
 packaging==25.0
 pandas==2.3.3
 pm-implicit==0.7.3

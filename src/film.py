@@ -3,6 +3,7 @@ import re
 
 from bs4 import BeautifulSoup
 
+from src.db import upsert_film
 from src.utils import fetch_html
 
 
@@ -92,4 +93,9 @@ async def get_film_by_id(film_id):
     status, html = await fetch_html(url)
     if status != "ok" or not html:
         return (status, None)
-    return ("ok", parse_film_data(html, film_id))
+    data = parse_film_data(html, film_id)
+    try:
+        await upsert_film(data)
+    except Exception as e:
+        print(f"[DB] Failed to upsert film {film_id}: {e}")
+    return ("ok", data)
